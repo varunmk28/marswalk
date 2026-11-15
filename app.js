@@ -377,7 +377,16 @@ document.querySelectorAll('#mode button').forEach(b => b.onclick = () => {
   setTimeout(() => { map.invalidateSize(); if (hud) { map.setZoom(17, { animate: false }); setSim(simT); } else map.setView([-4.8155, 137.3852], 15); }, 60);
 });
 
-$('#src').innerHTML = `Optical: MRO HiRISE &amp; CTX mosaics, Viking MDIM 2.1 (NASA Mars Trek). Topographic: ${D.source}. Thermal: Mars Odyssey THEMIS IR. Atmospheric: MSL REMS. Radiation: MSL RAD, NASA CCMC DONKI. Rover path &amp; images: MSL localisation and raw-image archive (NASA/JPL-Caltech).`;
+{ const a = (u, t) => `<a href="${u}" target="_blank" rel="noopener">${t}</a>`;
+$('#src').innerHTML = [
+  ['Optical', a('https://www.uahirise.org/', 'MRO HiRISE') + ', ' + a('https://trek.nasa.gov/mars/', 'CTX mosaic (NASA Mars Trek)') + ', ' + a('https://astrogeology.usgs.gov/search/map/mars_viking_mdim21_clrmosaic_global_232m', 'Viking MDIM 2.1')],
+  ['Topographic', a('https://astrogeology.usgs.gov/search/map/mars_msl_gale_merged_dem_1m', D.source)],
+  ['Thermal', a('https://themis.asu.edu/', 'Mars Odyssey THEMIS IR')],
+  ['Atmospheric', a('https://mars.nasa.gov/msl/weather/', 'MSL REMS weather')],
+  ['Radiation', a('https://mars.nasa.gov/msl/spacecraft/instruments/rad/', 'MSL RAD') + ' (' + a('https://doi.org/10.1126/science.1244797', 'Hassler et al. 2014') + ')'],
+  ['Space weather', a('https://ccmc.gsfc.nasa.gov/tools/DONKI/', 'NASA CCMC DONKI') + ', ' + a('https://www.swpc.noaa.gov/products/goes-x-ray-flux', 'NOAA GOES X-ray')],
+  ['Rover path &amp; images', a('https://mars.nasa.gov/maps/location/?mission=Curiosity', 'Curiosity location map') + ', ' + a('https://mars.nasa.gov/msl/multimedia/raw-images/', 'MSL raw images')]
+].map(([k, v]) => `<div><b>${k}:</b> ${v}</div>`).join(''); }
 /* ---------- crew status & survival advisor ---------- */
 const advLayer = L.layerGroup().addTo(map);
 function crewNow() { if (crew) return crew; if (route && route.P.length) { if (simT === 0) return route.P.reduce((a, p) => distM(p.ll, hab) > distM(a.ll, hab) ? p : a).ll; const d = simT * route.dist; return (route.P.find(q => q.d >= d) || route.P[route.P.length - 1]).ll; } return hab; }
