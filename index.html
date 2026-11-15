@@ -47,6 +47,7 @@ button.b:hover{border-color:var(--acc)}
 .wp span{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .wp button{background:none;border:0;color:var(--dim);cursor:pointer;padding:0 3px;font-size:13px}
 .wp button:hover{color:var(--text)}
+label.chk{display:flex;gap:8px;align-items:center;padding:3px 0;margin:0}.card>label{display:block;margin-bottom:4px}.btns{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}.b.pri{background:var(--acc);color:#16100c;border-color:var(--acc);font-weight:600}.check.info i{color:var(--route)}
 .legend{display:flex;gap:0;margin:4px 0 2px;border-radius:4px;overflow:hidden}
 .legend div{flex:1;text-align:center;font-size:10px;padding:2px 0;color:#111;font-weight:600}
 canvas{display:block;width:100%}
@@ -114,6 +115,18 @@ body.hud #hint,body.hud #readout{display:none}
     <h2>Space weather (live)</h2>
     <div class="card" id="sw">Loading NASA DONKI…</div>
 
+    <h2>Crew status &amp; survival advisor</h2>
+    <div class="card">
+      <label>Oxygen left <span id="o2V" class="mono"></span><input type="range" id="o2" min="0" max="100" value="60"></label>
+      <label class="chk">Crew members <input type="number" id="crew" value="2" min="1" max="6" style="width:64px"></label>
+      <label class="chk"><input type="checkbox" id="inj"> Someone is injured</label>
+      <label class="chk"><input type="checkbox" id="suit"> Suit power or cooling is failing</label>
+      <label class="chk"><input type="checkbox" id="storm"> Solar storm alert</label>
+      <div class="note" style="margin-top:4px">Crew position: <span id="crewPos">farthest point of the route, or the HUD slider position</span> <button class="b" id="markCrew" style="padding:1px 7px">Mark on map</button></div>
+      <div class="btns"><button class="b pri" id="guide">Get guidance</button><button class="b pri" id="guard">Guard mode: find shelter</button><button class="b pri" id="visor">Visor view</button><button class="b pri" id="card">Route card</button></div>
+      <div id="advice" style="margin-top:6px"></div>
+    </div>
+
     <h2>Data sources</h2>
     <div class="note" id="src"></div>
   </aside>
@@ -148,18 +161,35 @@ body.hud #hint,body.hud #readout{display:none}
     <h2>Science objective</h2>
     <div class="card">Characterise the <b>boxwork ridges</b> on Mount Sharp — low intersecting ridges that Curiosity began exploring in 2025, thought to record late groundwater flow through fractured bedrock. Stations are real Curiosity stops; open one to see what the rover saw there.</div>
 
+    <h2>Mission setup</h2>
+    <div class="card">
+      <label>Max walkable slope <span id="msV" class="mono"></span><input type="range" id="ms" min="8" max="30" value="20"></label>
+      <label class="chk"><input type="checkbox" id="rov"> Rover assist (faster, limited to 15°)</label>
+      <div id="targets"></div>
+      <div class="grid2" style="margin-top:6px">
+        <label>Slope caution <span id="rkV" class="mono"></span><input type="range" id="rk" min="0" max="8" value="3"></label>
+        <label>Time per stop (min)<input type="number" id="dw" value="25" min="0" max="120"></label>
+        <label>Consumables (h)<input type="number" id="lim" value="8" min="2" max="12" step="0.5"></label>
+        <label class="chk" style="margin-top:14px"><input type="checkbox" id="rt" checked> Return to hab</label>
+      </div>
+    </div>
+
+    <h2>Time of day at Gale</h2>
+    <div class="card">
+      <label>Local solar time (egress) <span id="todV" class="mono"></span><input type="range" id="tod" min="360" max="1080" step="15" value="540"></label>
+      <div class="note" id="sunNote"></div>
+    </div>
+
+    <h2>Team plan</h2>
+    <div class="card">
+      <label class="chk"><input type="checkbox" id="split"> Two astronauts split the stops</label>
+      <label class="chk"><input type="checkbox" id="bdrive"> Astronaut B drives the rover</label>
+      <div id="team" class="note"></div>
+    </div>
+
     <h2>EVA plan</h2>
     <div id="wps"></div>
-    <div style="display:flex;gap:6px;margin:6px 0"><button class="b" id="opt">Optimise order</button><button class="b" id="clr">Clear</button><label style="display:flex;align-items:center;gap:5px;margin-left:auto"><input type="checkbox" id="rt" checked> Return to hab</label></div>
-
-    <div class="grid2">
-      <label>Mobility<select id="mob"><option value="walk">On foot (suited)</option><option value="rover">Unpressurised rover</option></select></label>
-      <label>Max slope <span id="msV" class="mono"></span><input type="range" id="ms" min="8" max="30" value="20"></label>
-      <label>Slope caution <span id="rkV" class="mono"></span><input type="range" id="rk" min="0" max="8" value="3"></label>
-      <label>Time per station (min)<input type="number" id="dw" value="25" min="0" max="120"></label>
-      <label>Egress (LMST)<input type="time" id="st" value="09:00"></label>
-      <label>Consumables (h)<input type="number" id="lim" value="8" min="2" max="12" step="0.5"></label>
-    </div>
+    <div style="display:flex;gap:6px;margin:6px 0"><button class="b" id="opt">Optimise order</button><button class="b" id="clr">Clear</button></div>
 
     <h2>Route summary <span id="busy" class="note"></span></h2>
     <div class="grid2" id="stats"></div>
@@ -171,7 +201,7 @@ body.hud #hint,body.hud #readout{display:none}
   </aside>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
-<script src="data/mission.js?v=2"></script>
-<script src="app.js?v=2"></script>
+<script src="data/mission.js?v=6"></script>
+<script src="app.js?v=6"></script>
 </body>
 </html>

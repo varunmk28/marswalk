@@ -12,11 +12,11 @@ const MOB = { walk: { v: 0.8, ms: 20, back: 1500, name: 'On foot' }, rover: { v:
 const raw = new Uint16Array(await (await fetch('data/dem.bin?v=2')).arrayBuffer());
 const Z = new Float32Array(N * N); let zmin = 1e9, zmax = -1e9;
 for (let i = 0; i < N * N; i++) { const z = D.base + raw[i] * D.scale; Z[i] = z; if (z < zmin) zmin = z; if (z > zmax) zmax = z; }
-const S = new Float32Array(N * N), HS = new Float32Array(N * N);
+const S = new Float32Array(N * N), HS = new Float32Array(N * N), DX = new Float32Array(N * N), DY = new Float32Array(N * N);
 for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) {
   const i = r * N + c, c0 = Math.max(c - 1, 0), c1 = Math.min(c + 1, N - 1), r0 = Math.max(r - 1, 0), r1 = Math.min(r + 1, N - 1);
   const dx = (Z[r * N + c1] - Z[r * N + c0]) / ((c1 - c0) * D.cell), dy = (Z[r0 * N + c] - Z[r1 * N + c]) / ((r1 - r0) * D.cell);
-  S[i] = Math.atan(Math.hypot(dx, dy)) * 180 / Math.PI;
+  S[i] = Math.atan(Math.hypot(dx, dy)) * 180 / Math.PI; DX[i] = dx; DY[i] = dy;
   HS[i] = Math.max(0, Math.min(1, 0.55 + 0.9 * (-dx * 0.7 + dy * 0.7)));   // NW illumination
 }
 const ll2rc = (lat, lon) => [Math.min(N - 1, Math.max(0, Math.floor((D.north - lat) / (D.north - D.south) * N))), Math.min(N - 1, Math.max(0, Math.floor((lon - D.west) / (D.east - D.west) * N)))];
@@ -61,7 +61,8 @@ const overlays = [
   { n: 'THEMIS night IR', d: 'Thermal · bright = rocky, dark = loose fines', l: tl('THEMIS_NightIR_ControlledMosaics_100m_v2_oct2018', 'png', 9), o: .6 },
   { n: 'THEMIS day IR', d: 'Thermal · Mars Odyssey 100 m/px', l: tl('THEMIS_DayIR_ControlledMosaics_100m_v2_oct2018', 'png', 9), o: .6 },
   { n: 'HiRISE DEM (regional)', d: 'Topographic · Mars Trek shaded DEM', l: tl('Gale_DEM_SMG_1m', 'png', 14, [[-4.9254, 137.1225], [-4.249, 137.7298]]), o: .6 },
-  { n: 'Curiosity traverse', d: 'MSL rover path, sols 0–' + M.traverse[M.traverse.length - 1][2], l: L.layerGroup(), on: true, vec: true }];
+  { n: 'Curiosity traverse', d: 'MSL rover path, sols 0–' + M.traverse[M.traverse.length - 1][2], l: L.layerGroup(), on: true, vec: true },
+  { n: 'Sunlight at egress time', d: 'Slope-based shading for the chosen hour (no cast shadows)', l: L.imageOverlay('data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==', BB), o: .6 }];
 const trav = M.traverse.map(p => [p[1], p[0]]);
 overlays[5].l.addLayer(L.polyline(trav, { color: '#000', weight: 4, opacity: .5 })).addLayer(L.polyline(trav, { color: '#ffd9a0', weight: 1.6, dashArray: '4 4' }));
 const last = M.traverse[M.traverse.length - 1];
@@ -102,7 +103,17 @@ function flattest(lat, lon, rad = 150) {            // flattest 20 m patch withi
 }
 let hab = flattest(-4.8150, 137.3850);
 let plan = ['S3', 'S4', 'S5', 'S6'].map(id => ({ id }));   // ordered stops; custom = {id,ll,name}
-let customN = 0, route = null, simT = 0;
+let customN = 0, route = null, routeB = null, simT = 0, crew = null, armCrew = false;
+function lookout(rad = 450) {                             // highest gently-sloped point near the hab
+  const [r0, c0] = ll2rc(...hab), k = Math.round(rad / D.cell); let best = -1e9, bi = r0 * N + c0;
+  for (let r = Math.max(0, r0 - k); r < Math.min(N, r0 + k); r++) for (let c = Math.max(0, c0 - k); c < Math.min(N, c0 + k); c++) {
+    const i = r * N + c; if (S[i] < 12 && Z[i] > best && Math.hypot(r - r0, c - c0) <= k) { best = Z[i]; bi = i; }
+  }
+  const r = (bi / N) | 0; return rc2ll(r, bi - r * N);
+}
+const VP = () => ({ id: 'VP', ll: lookout(), name: 'Scarp viewpoint · highest walkable point', tag: 'V' });
+plan.push(VP());
+const TARGETS = [{ n: 'Boxwork ridge edge', ids: ['S4', 'S5', 'S6'] }, { n: 'Sulfate terrace', ids: ['S3'] }, { n: 'Scarp viewpoint', ids: ['VP'] }];
 const stop = p => p.ll ? p : stations.find(s => s.id === p.id);
 const icon = (cls, txt, sz = 24) => L.divIcon({ className: '', html: `<div class="mk ${cls}" style="width:${sz}px;height:${sz}px">${txt}</div>`, iconSize: [sz, sz], iconAnchor: [sz / 2, sz / 2] });
 const habMk = L.marker(hab, { icon: icon('h', 'HAB', 34), draggable: true, zIndexOffset: 500 }).addTo(map);
@@ -124,6 +135,7 @@ stations.forEach(s => {
 });
 map.on('click', e => {
   const { lat, lng } = e.latlng; if (!inGrid(lat, lng) || document.body.classList.contains('hud')) return;
+  if (armCrew) { armCrew = false; crew = [lat, lng]; $('#crewPos').textContent = `${lat.toFixed(5)}°, ${lng.toFixed(5)}°E`; $('#markCrew').textContent = 'Mark on map'; advise(); return; }
   customN++; plan.push({ id: 'C' + customN, ll: [lat, lng], name: 'Waypoint ' + customN, tag: customN }); replan();
 });
 
@@ -160,11 +172,23 @@ function astar(a, b, v0, maxS, risk) {
 const fmtT = s => { s = Math.max(0, Math.round(s / 60)); return `${Math.floor(s / 60)}h ${String(s % 60).padStart(2, '0')}m`; };
 const lmst = s => { s = ((s % 88775) + 88775) % 88775; const h = s / 3600; return `${String(Math.floor(h)).padStart(2, '0')}:${String(Math.floor(h % 1 * 60)).padStart(2, '0')}`; };
 const hm = t => { const [h, m] = (t || '0:0').split(':').map(Number); return h * 3600 + m * 60; };
-function settings() { const mob = MOB[$('#mob').value]; return { mob, v: mob.v, ms: +$('#ms').value, risk: +$('#rk').value / 2, dwell: +$('#dw').value * 60, start: hm($('#st').value), lim: +$('#lim').value * 3600, rt: $('#rt').checked }; }
+function settings() { const rov = $('#rov').checked, mob = MOB[rov ? 'rover' : 'walk']; return { mob, v: mob.v, ms: rov ? Math.min(15, +$('#ms').value) : +$('#ms').value, risk: +$('#rk').value / 2, dwell: +$('#dw').value * 60, start: +$('#tod').value * 60, lim: +$('#lim').value * 3600, rt: $('#rt').checked }; }
 let timer;
 function replan() { $('#busy').textContent = 'computing…'; clearTimeout(timer); timer = setTimeout(compute, 30); renderPlan(); }
 function compute() {
-  const cfg = settings(), stops = plan.map(stop), pts = [hab, ...stops.map(s => s.ll)]; if (cfg.rt) pts.push(hab);
+  const cfg = settings(), stops = plan.map(stop);
+  if ($('#split').checked && stops.length > 1) {
+    const [a, b] = splitStops(stops), cfgB = { ...cfg };
+    if ($('#bdrive').checked) Object.assign(cfgB, { mob: MOB.rover, v: MOB.rover.v, ms: Math.min(cfg.ms, 15) });
+    route = routeFor(nnOrder(a), cfg); routeB = routeFor(nnOrder(b), cfgB); routeB.who = 'B';
+  } else { route = routeFor(stops, cfg); routeB = null; }
+  route.who = 'A';
+  draw(); renderStats(); renderProfile(); setSim(simT); $('#busy').textContent = '';
+}
+function nnOrder(list) { const left = [...list], out = []; let cur = hab; while (left.length) { let b = 0; left.forEach((p, i) => { if (distM(p.ll, cur) < distM(left[b].ll, cur)) b = i; }); cur = left[b].ll; out.push(left.splice(b, 1)[0]); } return out; }
+function splitStops(stops) { const ang = s => Math.atan2(s.ll[0] - hab[0], s.ll[1] - hab[1]), o = [...stops].sort((a, b) => ang(a) - ang(b)), h = Math.ceil(o.length / 2); return [o.slice(0, h), o.slice(h)]; }
+function routeFor(stops, cfg) {
+  const pts = [hab, ...stops.map(s => s.ll)]; if (cfg.rt) pts.push(hab);
   const P = [], legs = []; let dist = 0, time = 0, up = 0, down = 0, maxS = 0, far = 0, blocked = [];
   for (let k = 0; k < pts.length - 1; k++) {
     const path = astar(pts[k], pts[k + 1], cfg.v, cfg.ms, cfg.risk);
@@ -182,16 +206,30 @@ function compute() {
     legs.push({ name, d: dist, t: time, isStop: k < stops.length, ll: pts[k + 1] });
   }
   const nSt = legs.filter(l => l.isStop).length, total = time + nSt * cfg.dwell;
-  route = { P, legs, dist, walk: time, total, up, down, maxS, far, blocked, cfg, nSt };
-  draw(); renderStats(); renderProfile(); setSim(simT); $('#busy').textContent = '';
+  return { P, legs, dist, walk: time, total, up, down, maxS, far, blocked, cfg, nSt };
 }
 function draw() {
   routeLayer.clearLayers(); custLayer.clearLayers();
   stations.forEach(s => { const k = plan.findIndex(p => p.id === s.id); stMk[s.id].setIcon(icon(k < 0 ? 's off' : 's', s.tag)); });
   plan.filter(p => p.ll).forEach(p => L.marker(p.ll, { icon: icon('c', p.tag, 20) }).addTo(custLayer));
-  const pts = route.P.map(p => p.ll); if (!pts.length) return;
-  L.polyline(pts, { color: '#001318', weight: 7, opacity: .7 }).addTo(routeLayer);
-  L.polyline(pts, { color: '#3ee0ff', weight: 3 }).addTo(routeLayer);
+  [route, routeB].filter(Boolean).forEach(r => {
+    const pts = r.P.map(p => p.ll); if (!pts.length) return;
+    L.polyline(pts, { color: '#001318', weight: 7, opacity: .7 }).addTo(routeLayer);
+    L.polyline(pts, { color: r.who === 'B' ? '#ffb347' : '#3ee0ff', weight: 3, dashArray: r.cfg.mob === MOB.rover ? '9 6' : null }).addTo(routeLayer);
+  });
+}
+function renderTargets() {
+  $('#targets').innerHTML = '';
+  TARGETS.forEach(t => {
+    const on = t.ids.every(id => plan.some(p => p.id === id)), el = document.createElement('label'); el.className = 'chk';
+    el.innerHTML = `<input type="checkbox" ${on ? 'checked' : ''}> ${t.n}`;
+    el.querySelector('input').onchange = e => {
+      if (e.target.checked) t.ids.forEach(id => { if (!plan.some(p => p.id === id)) plan.push(id === 'VP' ? VP() : { id }); });
+      else plan = plan.filter(p => !t.ids.includes(p.id));
+      replan();
+    };
+    $('#targets').append(el);
+  });
 }
 function renderPlan() {
   const el = $('#wps'); el.innerHTML = '<div class="wp"><div class="tag" style="background:#fff;border-radius:4px">H</div><span>Habitat / lander <em class="note">(drag on map)</em></span></div>';
@@ -206,6 +244,7 @@ function renderPlan() {
     el.append(d);
   });
   if (!plan.length) el.insertAdjacentHTML('beforeend', '<div class="note">No stops yet — click a station or the map.</div>');
+  renderTargets();
 }
 $('#opt').onclick = () => {                               // nearest-neighbour ordering from the hab
   const left = [...plan], out = []; let cur = hab;
@@ -213,13 +252,30 @@ $('#opt').onclick = () => {                               // nearest-neighbour o
   plan = out; replan();
 };
 $('#clr').onclick = () => { plan = []; replan(); };
-['#ms', '#rk', '#dw', '#st', '#lim', '#rt'].forEach(s => $(s).addEventListener('input', () => { labels(); replan(); }));
-$('#mob').onchange = () => { $('#ms').value = MOB[$('#mob').value].ms; labels(); replan(); };
-function labels() { $('#msV').textContent = $('#ms').value + '°'; $('#rkV').textContent = ['off', 'low', 'low', 'med', 'med', 'high', 'high', 'max', 'max'][$('#rk').value]; }
+['#ms', '#rk', '#dw', '#tod', '#lim', '#rt', '#rov', '#split', '#bdrive'].forEach(s => $(s).addEventListener('input', () => { labels(); replan(); }));
+let sunT; $('#tod').addEventListener('input', () => { clearTimeout(sunT); sunT = setTimeout(updateSun, 60); });
+function labels() { $('#msV').textContent = ($('#rov').checked ? Math.min(15, +$('#ms').value) : $('#ms').value) + '°'; $('#todV').textContent = lmst(+$('#tod').value * 60); sunNote(); $('#rkV').textContent = ['off', 'low', 'low', 'med', 'med', 'high', 'high', 'max', 'max'][$('#rk').value]; }
 
 /* ---------- conditions: REMS + DONKI ---------- */
 const wx = M.rems.find(r => r.max_temp !== '--' && r.min_temp !== '--') || M.rems[0];
 const sun = { rise: hm(wx.sunrise), set: hm(wx.sunset) };
+const RAD = Math.PI / 180, GCR_USV_H = GCR_MSV_DAY * 1000 / 24;
+function sunAt(sec) {                                       // solar elevation/azimuth from Ls (season) and local solar time
+  const dec = Math.asin(Math.sin(25.19 * RAD) * Math.sin(+wx.ls * RAD)), lat = (D.south + D.north) / 2 * RAD, H = (sec / 3600 - 12) * 15 * RAD;
+  const el = Math.asin(Math.sin(lat) * Math.sin(dec) + Math.cos(lat) * Math.cos(dec) * Math.cos(H));
+  const az = Math.atan2(-Math.sin(H), Math.tan(dec) * Math.cos(lat) - Math.sin(lat) * Math.cos(H));
+  return { el: el / RAD, az: (az / RAD + 360) % 360 };
+}
+function groundT(sec) { const f = Math.min(1, Math.max(0, (sec - sun.rise) / (sun.set - sun.rise))); return +wx.min_gts_temp + (+wx.max_gts_temp - +wx.min_gts_temp) * Math.sin(Math.PI * f); }
+function sunNote() {
+  const s = +$('#tod').value * 60, p = sunAt(s);
+  $('#sunNote').textContent = p.el <= 0 ? `Sun below the horizon (${p.el.toFixed(0)}°). No EVA in darkness. GCR dose about ${GCR_USV_H.toFixed(1)} µSv/h.`
+    : `Sun elevation ${p.el.toFixed(0)}°, azimuth ${p.az.toFixed(0)}°. Ground about ${groundT(s).toFixed(0)} °C. GCR dose about ${GCR_USV_H.toFixed(1)} µSv/h. Shading uses slope only, not cast shadows.`;
+}
+function updateSun() {
+  const p = sunAt(+$('#tod').value * 60), e = p.el * RAD, a = p.az * RAD, sx = Math.sin(a) * Math.cos(e), sy = Math.cos(a) * Math.cos(e), sz = Math.sin(e);
+  overlays[6].l.setUrl(raster(i => { const il = p.el <= 0 ? 0 : Math.max(0, (-DX[i] * sx - DY[i] * sy + sz) / Math.hypot(DX[i], DY[i], 1)); return [10, 6, 24, Math.round((1 - il) * 235)]; }));
+}
 $('#remsSol').textContent = `sol ${wx.sol}`;
 $('#wx').innerHTML = [['Air temp', `${wx.min_temp} … ${wx.max_temp} °C`], ['Ground temp', `${wx.min_gts_temp} … ${wx.max_gts_temp} °C`], ['Pressure', `${wx.pressure} Pa`], ['Sky', wx.atmo_opacity], ['UV index', wx.local_uv_irradiance_index], ['Sunrise / sunset', `${wx.sunrise} / ${wx.sunset} LMST`], ['Season', `Ls ${wx.ls}° · ${wx.terrestrial_date}`]].map(k => `<div class="kv"><span>${k[0]}</span><span class="mono">${k[1]}</span></div>`).join('');
 (function spark() {
@@ -250,7 +306,10 @@ let sw = { level: 'warn', text: 'Space-weather feed unavailable — confirm with
 
 /* ---------- outputs ---------- */
 function renderStats() {
-  const r = route, c = r.cfg, dose = GCR_MSV_DAY * r.total / 86400 * 1000, end = c.start + r.total;
+  const rs = [route, routeB].filter(Boolean), sum = k => rs.reduce((a, x) => a + x[k], 0), mx = k => Math.max(...rs.map(x => x[k]));
+  const r = { ...route, dist: sum('dist'), up: sum('up'), down: sum('down'), walk: mx('walk'), total: mx('total'), maxS: mx('maxS'), far: mx('far'), blocked: rs.flatMap(x => x.blocked) }, c = route.cfg, dose = GCR_MSV_DAY * r.total / 86400 * 1000, end = c.start + r.total;
+  $('#team').innerHTML = routeB ? rs.map(x => `<div class="kv"><span style="color:${x.who === 'B' ? '#ffb347' : '#3ee0ff'}">Astronaut ${x.who} · ${x.cfg.mob.name}</span><span class="mono">${x.nSt} stops · ${(x.dist / 1000).toFixed(2)} km · ${fmtT(x.total)}</span></div>`).join('') + '<div style="margin-top:3px">Stops are split by direction from the hab; each astronaut returns to base. Working apart removes the buddy safety margin.</div>'
+    : 'Both astronauts walk the whole route together (buddy system).';
   $('#stats').innerHTML = [[(r.dist / 1000).toFixed(2) + ' km', 'Distance'], [fmtT(r.total), 'EVA duration'], [fmtT(r.walk), 'Moving time'], [`+${r.up.toFixed(0)} / −${r.down.toFixed(0)} m`, 'Climb / descent'], [r.maxS.toFixed(1) + '°', 'Steepest on route'], [dose.toFixed(0) + ' µSv', 'GCR dose (est.)'], [(r.far / 1000).toFixed(2) + ' km', 'Farthest from hab'], [`${lmst(c.start)}–${lmst(end)}`, 'Window (LMST)']]
     .map(k => `<div class="stat"><div class="v num">${k[0]}</div><div class="k">${k[1]}</div></div>`).join('');
   const ck = [], add = (lvl, t) => ck.push(`<div class="check ${lvl}"><i>${{ ok: '✓', warn: '!', bad: '✕' }[lvl]}</i><div>${t}</div></div>`);
@@ -319,6 +378,90 @@ document.querySelectorAll('#mode button').forEach(b => b.onclick = () => {
 });
 
 $('#src').innerHTML = `Optical: MRO HiRISE &amp; CTX mosaics, Viking MDIM 2.1 (NASA Mars Trek). Topographic: ${D.source}. Thermal: Mars Odyssey THEMIS IR. Atmospheric: MSL REMS. Radiation: MSL RAD, NASA CCMC DONKI. Rover path &amp; images: MSL localisation and raw-image archive (NASA/JPL-Caltech).`;
-labels(); renderPlan(); compute();
+/* ---------- crew status & survival advisor ---------- */
+const advLayer = L.layerGroup().addTo(map);
+function crewNow() { if (crew) return crew; if (route && route.P.length) { if (simT === 0) return route.P.reduce((a, p) => distM(p.ll, hab) > distM(a.ll, hab) ? p : a).ll; const d = simT * route.dist; return (route.P.find(q => q.d >= d) || route.P[route.P.length - 1]).ll; } return hab; }
+function pathStats(path, v) {
+  let t = 0, d = 0; const ll = [];
+  path.forEach((i, k) => { const r = (i / N) | 0, p = rc2ll(r, i - r * N); if (k) { const dxy = distM(p, ll[k - 1]), dz = Z[i] - Z[path[k - 1]]; if (dxy) { d += Math.hypot(dxy, dz); t += Math.hypot(dxy, dz) / (v * tobler(dz / dxy)); } } ll.push(p); });
+  return { t, d, ll };
+}
+const goTo = (from, to, v, ms, risk) => { const p = astar(from, to, v, ms, risk); return p ? pathStats(p, v) : null; };
+function goSafe(s, to) { let p = goTo(s.pos, to, s.v, s.ms, s.cfg.risk), relaxed = false; if (!p && s.inj) { p = goTo(s.pos, to, s.v, s.cfg.ms, s.cfg.risk); relaxed = !!p; } return { p, relaxed }; }
+let nooks;
+function findNooks() {          // flat spots with terrain rising >20° above the horizon on 3+ of 8 sides within 60 m
+  const out = [], dirs = [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [-1, 1], [1, -1], [1, 1]];
+  for (let r = 10; r < N - 10; r += 5) for (let c = 10; c < N - 10; c += 5) {
+    const i = r * N + c; if (S[i] > 12) continue; let b = 0;
+    for (const [dr, dc] of dirs) for (let k = 2; k <= 15; k++) { const j = (r + dr * k) * N + c + dc * k; if ((Z[j] - Z[i]) / (k * D.cell * Math.hypot(dr, dc)) > .36) { b++; break; } }
+    if (b >= 3) out.push({ ll: rc2ll(r, c), blocked: b });
+  }
+  return out;
+}
+function crewState() {
+  const cfg = settings(), inj = $('#inj').checked, suit = $('#suit').checked;
+  return { cfg, pos: crewNow(), n: Math.max(1, +$('#crew').value || 1), inj, suit, storm: $('#storm').checked || sw.level === 'bad',
+    v: cfg.v * (inj ? .5 : 1), ms: inj ? Math.min(cfg.ms, 12) : cfg.ms, o2: +$('#o2').value / 100 * cfg.lim * (suit ? 2 / 3 : 1) };
+}
+function showAdv(s, rows, path, col, extra = []) {
+  advLayer.clearLayers(); L.marker(s.pos, { icon: icon('a', '', 18), zIndexOffset: 950, interactive: false }).addTo(advLayer);
+  if (path) { L.polyline(path.ll, { color: '#000', weight: 8, opacity: .6 }).addTo(advLayer); L.polyline(path.ll, { color: col, weight: 4, dashArray: '2 8', lineCap: 'round' }).addTo(advLayer); }
+  extra.forEach(m => m.addTo(advLayer));
+  $('#advice').innerHTML = rows.map(([l, t]) => `<div class="check ${l}"><i>${{ ok: '✓', warn: '!', bad: '✕', info: '›' }[l]}</i><div>${t}</div></div>`).join('');
+}
+function advise() {
+  const s = crewState(), g = goSafe(s, hab), back = g.p, rows = [];
+  if (!back) return showAdv(s, [['bad', `No route back under ${s.cfg.ms}° from here. Stay on stable ground and call for rover pickup.`]]);
+  if (g.relaxed) rows.push(['warn', `No way back stays under 12°; this route needs slopes up to ${s.cfg.ms}°. The injured astronaut must be assisted on steep sections, or wait for the rover.`]);
+  if (back.d < 30) return showAdv(s, [['ok', 'Crew is at the habitat. Mark a position on the map or move the HUD slider to check a point on the route.']]);
+  const m = s.o2 / Math.max(1, back.t), now = s.cfg.start + (crew ? 0 : simT * route.total);
+  rows.push(['info', `Back to hab: <b>${back.d.toFixed(0)} m</b>, about <b>${fmtT(back.t)}</b>${s.inj ? ' at injured pace' : ''}. Oxygen time left: <b>${fmtT(s.o2)}</b>${s.suit ? ' (cut by a third for the suit fault)' : ''}.`]);
+  if (s.storm) rows.push(['bad', 'Solar storm alert: get to shelter now. Use Guard mode.']);
+  if (m < 1) rows.push(['bad', `Not enough oxygen to walk back. Stop all science, call the habitat for rover pickup and keep exertion low${s.n > 1 ? '. Stay together' : ''}.`]);
+  else if (m < 1.5) rows.push(['warn', `Thin margin (${((m - 1) * 100).toFixed(0)}% reserve). Abort remaining stops and head back now.`]);
+  else rows.push(['ok', `Oxygen covers the walk back with ${((m - 1) * 100).toFixed(0)}% reserve.`]);
+  if (s.inj) rows.push(s.n > 1 ? ['warn', 'Injured crew member: a crewmate walks alongside, pace halved, route kept under 12° where possible.'] : ['bad', 'Alone and injured: stay on flat ground and request rover rescue rather than walking.']);
+  if (s.suit) rows.push(['bad', 'Suit power or cooling fault: abort the EVA and return by the shortest safe route, no detours.']);
+  if (now + back.t > sun.set) rows.push(['warn', `Return would end after sunset (${wx.sunset} LMST).`]);
+  if (!s.storm && !s.inj && !s.suit && m >= 1.5) rows.push(['ok', 'No issues flagged. Continue the plan and re-check at each station.']);
+  showAdv(s, rows, back, m < 1 ? '#ff5a5a' : m < 1.5 ? '#f2c14e' : '#4cd08a');
+}
+function guard() {
+  const s = crewState(); nooks = nooks || findNooks();
+  const toHab = goSafe(s, hab).p, rows = [];
+  const near = nooks.map(n => ({ n, d0: distM(n.ll, s.pos) })).sort((a, b) => a.d0 - b.d0).slice(0, 6)
+    .map(x => ({ n: x.n, p: goSafe(s, x.n.ll).p })).filter(x => x.p).sort((a, b) => a.p.t - b.p.t);
+  const extra = nooks.map(n => L.circleMarker(n.ll, { radius: 3, color: '#b48cff', weight: 1, fillOpacity: .6, interactive: false }));
+  let path = toHab, col = '#4cd08a';
+  if (toHab && (toHab.t <= 1800 || !near.length || near[0].p.t >= toHab.t)) rows.push([toHab.t <= 1800 ? 'ok' : 'warn', `Go to the habitat: ${toHab.d.toFixed(0)} m, about ${fmtT(toHab.t)}. It is the only full radiation shelter${toHab.t > 1800 ? ', and no terrain shelter is closer' : ''}.`]);
+  else if (near.length) {
+    const k = near[0]; path = k.p; col = '#b48cff'; extra.push(L.marker(k.n.ll, { icon: icon('c', '⛨', 22) }));
+    rows.push(['warn', `${toHab ? `Habitat is ${fmtT(toHab.t)} away.` : 'No safe route to the habitat from here.'} Nearest terrain shelter: base of a slope that blocks ${k.n.blocked} of 8 horizon directions, ${k.p.d.toFixed(0)} m, about ${fmtT(k.p.t)}. Partial shielding only: stay against the wall and wait for the rover.`]);
+  } else rows.push(['bad', 'No terrain shelter reachable nearby. Head for the habitat and call the rover.']);
+  if (path && s.o2 < path.t) rows.push(['bad', 'Oxygen is shorter than the time to shelter. Request rover pickup immediately.']);
+  rows.push(['info', `Purple dots: ${nooks.length} partly sheltered spots in the map area (terrain rising above 20° on 3+ sides within 60 m).`]);
+  showAdv(s, rows, path, col, extra);
+}
+function routeCard() {
+  const rs = [route, routeB].filter(Boolean), w = window.open('', '_blank'); if (!w) return alert('Allow pop-ups to open the route card.');
+  const brg = (a, b) => ((Math.atan2((b[1] - a[1]) * MXLON, (b[0] - a[0]) * MX) * 180 / Math.PI + 360) % 360).toFixed(0).padStart(3, '0');
+  const body = rs.map(r => {
+    let pD = 0, pT = 0, pLL = hab, pName = 'Habitat', stops = 0;
+    const rows = r.legs.map((l, k) => {
+      const seg = r.P.filter(p => p.leg === k), climb = seg.reduce((a, p, i) => a + (i && p.z > seg[i - 1].z ? p.z - seg[i - 1].z : 0), 0), mxS = Math.max(0, ...seg.map(p => p.s));
+      const row = `<tr><td>${k + 1}</td><td>${pName} → ${l.name}</td><td>${(l.d - pD).toFixed(0)} m</td><td>${fmtT(l.t - pT)}</td><td>${brg(pLL, l.ll)}°</td><td>+${climb.toFixed(0)} m</td><td>${mxS.toFixed(1)}°</td><td>${lmst(r.cfg.start + l.t + stops * r.cfg.dwell)}</td></tr>`;
+      if (l.isStop) stops++; pD = l.d; pT = l.t; pLL = l.ll; pName = l.name; return row;
+    }).join('');
+    return `<h2>Astronaut ${r.who} · ${r.cfg.mob.name}</h2><table><tr><th>#</th><th>Leg</th><th>Dist</th><th>Move time</th><th>Heading</th><th>Climb</th><th>Max slope</th><th>Arrive (LMST)</th></tr>${rows}</table><p>Total ${(r.dist / 1000).toFixed(2)} km · EVA ${fmtT(r.total)} incl. ${r.cfg.dwell / 60} min per stop · steepest ${r.maxS.toFixed(1)}°</p>`;
+  }).join('');
+  w.document.write(`<!doctype html><meta charset="utf-8"><title>MarsWalk route card</title><style>body{font:12px system-ui;margin:20px;color:#111}table{border-collapse:collapse;width:100%}td,th{border:1px solid #bbb;padding:4px 6px;text-align:left}th{background:#f3e7df}h1{margin:0}h2{font-size:14px;margin:14px 0 4px}.check{display:flex;gap:6px}button{margin:8px 0}@media print{button{display:none}}</style><h1>MarsWalk route card</h1><div>Gale Crater boxwork · egress ${lmst(rs[0].cfg.start)} LMST · sunset ${wx.sunset} LMST · REMS sol ${wx.sol} · space weather: ${sw.text}</div><button onclick="print()">Print</button>${body}<h2>Go / no-go</h2>${$('#checks').innerHTML}`);
+  w.document.close();
+}
+$('#o2').oninput = () => $('#o2V').textContent = $('#o2').value + '%';
+$('#guide').onclick = advise; $('#guard').onclick = guard; $('#card').onclick = routeCard;
+$('#visor').onclick = () => document.querySelector('#mode [data-m=hud]').click();
+$('#markCrew').onclick = () => { armCrew = !armCrew; $('#markCrew').textContent = armCrew ? 'Now click the map…' : 'Mark on map'; };
+
+labels(); renderPlan(); compute(); updateSun(); $('#o2V').textContent = $('#o2').value + '%';
 window.MW = { get route() { return route; }, map };
 })();

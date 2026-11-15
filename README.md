@@ -31,6 +31,28 @@ Then open http://localhost:8765. No build step, no API keys. It is a static site
 - **Habitat siting.** The default base is snapped to the flattest 20 m patch nearby; drag
   it to re-plan.
 
+### Mission, team and survival tools
+
+- **Mission setup.** Max walkable slope, rover assist (capped at 15°), and three
+  science targets you can toggle: *Boxwork ridge edge* (stations E–G), *Sulfate
+  terrace* (station D) and *Scarp viewpoint* (the highest gently sloped point within
+  450 m of the hab, found from the elevation model). The grouping of stations into
+  targets is our own choice for the demo.
+- **Time of day at Gale.** Sets the egress time. It computes sun elevation and azimuth
+  from the season (Ls) and local solar time, estimates ground temperature from REMS,
+  shows the dose rate, and redraws a "Sunlight at egress time" layer. That layer shades
+  by slope facing only; it does not model cast shadows.
+- **Team plan.** Split the stops between two astronauts by direction from the hab, and
+  optionally let astronaut B drive the rover. Each gets their own route (cyan / orange).
+- **Crew status and survival advisor.** Enter oxygen left, crew size, injury, suit
+  fault and solar-storm alert, and mark the crew's position on the map (default: the
+  farthest point of the route). *Get guidance* routes back to the hab and compares the
+  walk-back time with oxygen. Injury halves pace and prefers slopes under 12°; a suit
+  fault cuts usable time by a third. *Guard mode* finds the fastest shelter: the hab,
+  or a partly sheltered spot at the base of steep terrain if that is quicker. *Visor
+  view* opens the HUD. *Route card* opens a printable leg-by-leg card with headings,
+  climb, max slope and arrival times.
+
 ## Data layers (7 kinds, 6 missions)
 
 | Kind | Layer | Source |
@@ -59,6 +81,9 @@ and space weather load live.
   temperature is interpolated between that sol's min and max.
 - THEMIS is 100 m/px — context for surface texture, not a per-step traction map.
 - HUD position is simulated along the route; there is no live positioning.
+- The survival advisor's rules (injured pace, suit-fault penalty, 30-minute shelter
+  threshold) are illustrative, not NASA procedures. Terrain shelters only block part of
+  the sky, so they reduce exposure from those directions only.
 
 ## Credits
 
